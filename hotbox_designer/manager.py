@@ -6,7 +6,9 @@ from PySide2 import QtWidgets, QtCore
 
 import hotbox_designer
 from hotbox_designer.commands import OPEN_COMMAND, CLOSE_COMMAND, SWITCH_COMMAND
+from hotbox_designer.reader import HotboxReader
 from hotbox_designer.designer.application import HotboxEditor
+from hotbox_designer.applications import Nuke, Maya, Houdini
 from hotbox_designer.widgets import BoolCombo, Title, CommandButton
 from hotbox_designer.qtutils import icon
 from hotbox_designer.dialog import (
@@ -14,7 +16,58 @@ from hotbox_designer.dialog import (
     CommandDisplayDialog, HotkeySetter, warning)
 from hotbox_designer.data import (
     get_valid_name, TRIGGERING_TYPES, save_datas, load_hotboxes_datas,
-    hotbox_data_to_html, load_json)
+    hotbox_data_to_html, load_json, ensure_old_data_compatible)
+
+
+hotboxes = {}
+hotbox_manager = None
+APPLICATIONS = {'maya': Maya, 'nuke': Nuke, 'houdini': Houdini}
+
+
+def launch_manager(application):
+    if hotbox_manager is None:
+        global hotbox_manager
+        hotbox_manager = HotboxManager(APPLICATIONS[application]())
+    hotbox_manager.show()
+
+
+def initialize(application):
+    if hotboxes:
+        return
+    load_hotboxes(application)
+
+
+def load_hotboxes(application):
+    hotboxes_datas = load_hotboxes_datas(application.local_file)
+    file_ = application.shared_file
+    hotboxes_datas += [
+        ensure_old_data_compatible(load_json(f)) for f in load_json(file_)]
+
+    for hotboxes_data in hotboxes_datas:
+        name = hotboxes_data['general']['name']
+        reader = HotboxReader(hotboxes_data, parent=None)
+        reader.hideSubmenusRequested.connect(hide_submenus)
+        hotboxes[name] = reader
+
+
+def show(name):
+    hotboxes[name].show()
+
+
+def hide(name):
+    hotboxes[name].hide()
+
+
+def switch(name):
+    if hotboxes[name].isVisible():
+        return hide(name)
+    return show(name)
+
+
+def hide_submenus():
+    for name in hotboxes:
+        if hotboxes[name].is_submenu:
+            hide(name)
 
 
 class HotboxManager(QtWidgets.QWidget):
@@ -33,7 +86,7 @@ class HotboxManager(QtWidgets.QWidget):
         self.personnal_view.selectedRowChanged.connect(method)
 
         self.toolbar = HotboxManagerToolbar()
-        self.toolbar.reload.setEnabled(False)
+        self.toolbar.reload.setEnabled(True)
         self.toolbar.link.setEnabled(False)
         self.toolbar.unlink.setEnabled(False)
         self.toolbar.newRequested.connect(self._call_create)
@@ -137,8 +190,11 @@ class HotboxManager(QtWidgets.QWidget):
     def hotbox_data_modified(self, hotbox_data):
         row = self.personnal_view.get_selected_row()
         self.personnal_model.set_hotbox(row, hotbox_data)
-        self.toolbar.reload.setEnabled(True)
+        # self.toolbar.reload.setEnabled(True)
         self.save_hotboxes()
+
+        # # reload hotboxes automatically after the hotbox data is modified in the editor
+        self.toolbar.reloadRequested.emit()
 
     def _shared_selected_row_changed(self):
         index = self.shared_view.get_selected_row()
@@ -219,7 +275,16 @@ class HotboxManager(QtWidgets.QWidget):
         self.personnal_model.hotboxes.append(dialog.hotbox())
         self.personnal_model.layoutChanged.emit()
         self.save_hotboxes()
-        self.toolbar.reload.setEnabled(True)
+        # self.toolbar.reload.setEnabled(True)
+
+        # get the amount of hotboxes and get the new hotbox index
+        hotbox_count = len(self.personnal_model.hotboxes) - 1
+        # select newly created hotbox
+        if hotbox_count > -1:
+            self.personnal_view.selectRow(hotbox_count)
+
+        # reload hotboxes automatically after a hotbox is created
+        self.toolbar.reloadRequested.emit()
 
     def _call_add_link(self):
         filename = import_hotbox_link()
@@ -227,7 +292,9 @@ class HotboxManager(QtWidgets.QWidget):
             return
         self.shared_model.add_link(filename)
         self.save_hotboxes()
-        self.toolbar.reload.setEnabled(True)
+        # self.toolbar.reload.setEnabled(True)
+        # reload hotboxes automatically after a hotbox is created
+        self.toolbar.reloadRequested.emit()
 
     def _call_unlink(self):
         index = self.shared_view.get_selected_row()
@@ -235,7 +302,10 @@ class HotboxManager(QtWidgets.QWidget):
             return warning('Hotbox designer', 'No hotbox selected')
         self.shared_model.remove_link(index)
         self.save_hotboxes()
-        self.toolbar.reload.setEnabled(True)
+
+        # reload hotboxes automatically after a hotbox is created
+        self.toolbar.reloadRequested.emit()
+        # self.toolbar.reload.setEnabled(True)
 
     def _call_remove(self):
         hotbox = self.get_selected_hotbox()
@@ -256,11 +326,22 @@ class HotboxManager(QtWidgets.QWidget):
         self.personnal_model.hotboxes.remove(hotbox)
         self.personnal_model.layoutChanged.emit()
         self.save_hotboxes()
-        self.toolbar.reload.setEnabled(True)
+        # self.toolbar.reload.setEnabled(True)
+
+        # get the amount of hotboxes and get the new hotbox index
+        hotbox_count = len(self.personnal_model.hotboxes) - 1
+        # select newly created hotbox
+        if hotbox_count > -1:
+            self.personnal_view.selectRow(hotbox_count)
+
+        # reload hotboxes automatically after a hotbox is removed
+        self.toolbar.reloadRequested.emit()
+
+
 
     def _call_reload(self):
         hotbox_designer.load_hotboxes(self.application)
-        self.toolbar.reload.setEnabled(False)
+        # self.toolbar.reload.setEnabled(False)
 
     def _call_option_set(self, option, value):
         self.personnal_model.layoutAboutToBeChanged.emit()
@@ -271,8 +352,11 @@ class HotboxManager(QtWidgets.QWidget):
         if hotbox is not None:
             hotbox['general'][option] = value
         self.personnal_model.layoutChanged.emit()
-        self.toolbar.reload.setEnabled(True)
+        # self.toolbar.reload.setEnabled(True)
         self.save_hotboxes()
+        
+        # reload hotboxes automatically after the hotbox options are modified
+        self.toolbar.reloadRequested.emit()
 
     def _call_set_hotkey(self):
         hotbox = self.get_selected_hotbox()
@@ -358,7 +442,7 @@ class HotboxManagerToolbar(QtWidgets.QToolBar):
         self.hotkeyset.setToolTip('Set hotkey')
         self.hotkeyset.triggered.connect(self.setHotkeyRequested.emit)
         self.reload = QtWidgets.QAction(icon('reload.png'), '', self)
-        self.reload.setToolTip('Reload hotboxes')
+        self.reload.setToolTip('Force reload hotboxes')
         self.reload.triggered.connect(self.reloadRequested.emit)
 
         self.addAction(self.new)

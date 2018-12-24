@@ -1,0 +1,13 @@
+diff a/hotbox_designer/manager.py b/hotbox_designer/manager.py	(rejected hunks)
+@@ -50,6 +50,11 @@
+         hotboxes[name] = reader
+ 
+ 
++def clear_loaded_hotboxes():
++    global hotboxes
++    hotboxes = {}
++
++
+ def show(name):
+     hotboxes[name].show()
+ 
